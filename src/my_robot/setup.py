@@ -28,13 +28,14 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "talker = my_robot.talker:main",
-            "listener = my_robot.listener:main",
-            "service_server = my_robot.service_server:main",
-            "service_client = my_robot.service_client:main",
-            "param_node = my_robot.param_node:main",
-            "sensor_publisher = my_robot.sensor_publisher:main",
+            # "talker = my_robot.talker:main",
+            # "listener = my_robot.listener:main",
+            # "service_server = my_robot.service_server:main",
+            # "service_client = my_robot.service_client:main",
+            # "param_node = my_robot.param_node:main",
+            # "sensor_publisher = my_robot.sensor_publisher:main",
             "central_orchestrator = my_robot.central_orchestrator:main",
+            "terminal_ui = my_robot.llm_output:term",
         ],
     },
 )
