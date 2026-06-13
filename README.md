@@ -73,8 +73,16 @@ To maintain system integrity across different development teams, all inter-node 
 
 > **Maintainers:** Update your respective blocks with specific dependencies and run commands as your modules reach completion.
 
-* **Status:** 🟡 In Development
+* **Status:** 🟢 Functional
 * **Role:** The core state machine. Listens to inputs, overrides previous states, configures vision, and publishes hardware commands.
+* **Dependencies:** `rclpy`, `std_msgs`, `example_interfaces`
+* **Run Command:**
+```bash
+ros2 run my_robot central_orchestrator
+
+```
+
+
 
 * **Status:** 🔴 Pending
 * **Role:** YOLO inference node. Scans the `/video_frames` feed exclusively for the class specified by the Orchestrator.
@@ -96,7 +104,7 @@ To maintain system integrity across different development teams, all inter-node 
 
 ### 1. Prerequisites
 
-* **OS:** Ubuntu 24.04 (Noble) / WSL2
+* **OS:** Linux Ubuntu 24.04 (Noble) or WSL2 equivalent
 * **Framework:** ROS2 Jazzy Jalisco
 * **Network:** ESP8266 and Host PC on the same localized Wi-Fi.
 
