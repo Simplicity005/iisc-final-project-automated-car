@@ -34,6 +34,7 @@ setup(
             "service_client = my_robot.service_client:main",
             "param_node = my_robot.param_node:main",
             "sensor_publisher = my_robot.sensor_publisher:main",
+            "central_orchestrator = my_robot.central_orchestrator:main",
         ],
     },
 )
