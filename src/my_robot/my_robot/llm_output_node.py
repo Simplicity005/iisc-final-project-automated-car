@@ -7,8 +7,11 @@ import rclpy
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from openai import OpenAI
 from rclpy.node import Node
 from std_msgs.msg import String
+
+from my_robot_msgs.srv import ParseIntent
 
 from .utilities.yolo_objects import searchable_objects
 
@@ -29,63 +32,72 @@ Rules:
 
 
 class LLmOutputSender(Node):
-    CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    # OpenAI(
-    #     api_key="sta_21bfcd68f16a6fb61ccf6c3eb5e38f12ae870aa2a28055b4",
-    #     base_url="https://api.freetheai.xyz/v1",
-    # )
+    CLIENT = OpenAI(
+        api_key="sta_21bfcd68f16a6fb61ccf6c3eb5e38f12ae870aa2a28055b4",
+        base_url="https://api.freetheai.xyz/v1",
+    )
+    # CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     def __init__(self):
         super().__init__("llm_command")
         self.publisher = self.create_publisher(String, "user_target", 10)
-        self.subscriber = self.create_subscription(
-            String, "bot_input", self.parse_intent, 10
-        )  # Later make a proper service and receiver so that UI can get True and False
+        self.srv = self.create_service(
+            ParseIntent, "parse_intent", self.handle_parse_intent
+        )
 
-    def parse_intent(self, msg: String):
-        raw_text = msg.data
+    def handle_parse_intent(
+        self, request: ParseIntent.Request, response: ParseIntent.Response
+    ):
+        raw_text = request.command
         start_timer = time.time()
         self.get_logger().info(f"LLM request started for: '{raw_text}'")
 
-        # res = self.CLIENT.chat.completions.create(
-        #     model="kai/openrouter/free",  # Change later
-        #     messages=[
-        #         {"role": "system", "content": _SYSTEM_PROMPT},
-        #         {"role": "user", "content": raw_text},
-        #     ],
-        res = self.CLIENT.models.generate_content(
-            model="gemini-3.5-flash",
-            config=types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
-            contents=raw_text,
+        res = self.CLIENT.chat.completions.create(
+            model="kai/openrouter/free",  # Change later
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": raw_text},
+            ],
         )
+        # res = self.CLIENT.models.generate_content(
+        #     model="gemini-3.5-flash",
+        #     config=types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
+        #     contents=raw_text,
+        # )
         finish_time = time.time()
-
         self.get_logger().info(f"LLM response in {finish_time - start_timer:.2f}s")
 
-        content = str(res.text).strip()
+        content = str(res.choices[0].message.content).strip()
 
         try:
             data = json.loads(content)
             objective = data.get("objective")
         except (json.JSONDecodeError, AttributeError):
-            # Fallback: try to extract the value with regex if the model wrapped the JSON
             match = re.search(r'"objective"\s*:\s*"([^"]+)"', content)
             objective = match.group(1) if match else None
 
         if not objective:
             self.get_logger().warn("No objective extracted from input")
-            return
+            response.success = False
+            response.message = "Could not understand what object to find."
+            return response
 
         objective_lower = objective.lower().strip()
 
         if objective_lower not in _SEARCHABLE_SET:
             self.get_logger().warn(f"'{objective_lower}' not in searchable objects")
-            return
+            response.success = False
+            response.message = f"'{objective_lower}' is not a searchable object."
+            return response
 
         pub_msg = String()
         pub_msg.data = objective_lower
         self.publisher.publish(pub_msg)
         self.get_logger().info(f"Published '{objective_lower}' to /user_target")
+
+        response.success = True
+        response.message = objective_lower
+        return response
 
 
 def term(args=None):
@@ -93,12 +105,15 @@ def term(args=None):
     node = LLmOutputSender()
 
     while True:
-        msg = input("What should I do?: ").strip()
-        if not msg:
+        raw = input("What should I do?: ").strip()
+        if not raw:
             break
-        node.parse_intent(String(data=msg))
+        req = ParseIntent.Request()
+        req.command = raw
+        res = ParseIntent.Response()
+        node.handle_parse_intent(req, res)
+        print(f"Result: success={res.success}, message='{res.message}'")
 
-    rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
 

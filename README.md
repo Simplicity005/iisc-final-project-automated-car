@@ -42,11 +42,58 @@ flowchart TD
         CAM -. MJPEG .-> B
     end
 
-    UI -->|/bot_input| D
+    UI <-->|parse_intent srv| D
     D -->|/user_target| A
-    A <-->|/detect_object| B
-    A -->|/movement_commands| E
+    A <-->|detect_object srv| B
+    A -->|/movement_commands<br/>LEFT · STOP| E
     E -. UDP .-> HW
+```
+
+---
+
+## ✦ App Flow
+
+End-to-end lifecycle of a single user command — from Discord message to hardware motion.
+
+```mermaid
+flowchart TD
+    classDef svc fill:#1a3a5c,stroke:#7ab,stroke-width:1.5px,color:#fff
+    classDef topic fill:#2d4a1e,stroke:#8bc,stroke-width:1.5px,color:#fff
+    classDef hw fill:#E95420,stroke:#fff,stroke-width:2px,color:#fff
+    classDef decision fill:#4a3060,stroke:#b9a,stroke-width:1.5px,color:#fff
+    classDef err fill:#6b1a1a,stroke:#f88,stroke-width:1.5px,color:#fff
+
+    U([👤 User]) -->|mention / slash cmd| BOT[Discord Bot]
+    BOT -->|parse_intent Request| LLM[LLM Intent Node]
+    LLM -->|Gemini API call| GEM((Google Gemini))
+    GEM -->|JSON objective| LLM
+
+    LLM --> CHK{Valid YOLO\nobject?}
+    CHK -->|No| FAIL[success=False\nmessage=reason]:::err
+    FAIL --> BOT
+    BOT -->|❌ Error reply| U
+
+    CHK -->|Yes| OK[success=True\npublish /user_target]
+    OK --> BOT
+    BOT -->|✅ Searching reply| U
+    OK -->|/user_target topic| ORC{Central\nOrchestrator}:::decision
+
+    ORC -->|state = SEARCHING| TIMER[⏱ Timer 0.5 s]
+    TIMER -->|detect_object Request| VIS[Vision Node]
+    VIS -->|snapshot + YOLO| CAM[📷 IP Camera]
+    CAM --> VIS
+
+    VIS --> DET{Object\ndetected?}
+    DET -->|No → success=False| ORC
+    ORC -->|LEFT cmd| UDP[🛜 UDP Bridge]
+    UDP -. UDP packet .-> ESP((ESP8266)):::hw
+    ESP -. rotate left .-> ESP
+    UDP --> TIMER
+
+    DET -->|Yes → success=True| ORC
+    ORC -->|state = FOUND\nSTOP cmd| UDP2[🛜 UDP Bridge]
+    UDP2 -. UDP packet .-> ESP2((ESP8266)):::hw
+    ESP2 -. motors stop .-> ESP2
 ```
 
 ---
@@ -59,17 +106,30 @@ To maintain system integrity across different development teams, all inter-node 
 
 | Publisher | Subscriber | Topic Name | Message Type | Purpose |
 | --- | --- | --- | --- | --- |
-| **UI Layer** | **LLM Intent** | `/bot_input` | `std_msgs/msg/String` | Raw natural language from the user. |
 | **LLM Intent** | **Central** | `/user_target` | `std_msgs/msg/String` | Validated, lowercase object target (e.g. `"apple"`). |
-| **Central** | **UDP Bridge** | `/movement_commands` | `std_msgs/msg/String` | Emits hardware state (`TURN` / `STOP`). |
+| **Central** | **UDP Bridge** | `/movement_commands` | `std_msgs/msg/String` | Emits hardware state (`LEFT` / `STOP`). |
 
-### Synchronous Configuration (Services)
+### Synchronous Request-Response (Services)
 
 | Client | Server | Service Name | Service Type | Purpose |
 | --- | --- | --- | --- | --- |
-| **Central** | **Vision** | `/detect_object` | `my_robot_msgs/srv/DetectObject` | Trigger detection for a named object; returns `success` + `message`. |
+| **Discord Bot** | **LLM Intent** | `parse_intent` | `my_robot_msgs/srv/ParseIntent` | Send raw text; returns `success` + parsed object name or error reason. |
+| **Central** | **Vision** | `detect_object` | `my_robot_msgs/srv/DetectObject` | Trigger detection for a named object; returns `success` + `message`. |
 
 ### Custom Service Definitions (`my_robot_msgs`)
+
+#### `ParseIntent.srv`
+```
+string command
+---
+bool success
+string message
+```
+
+Call example:
+```bash
+ros2 service call /parse_intent my_robot_msgs/srv/ParseIntent "{command: 'find me an apple'}"
+```
 
 #### `DetectObject.srv`
 ```
@@ -93,7 +153,7 @@ ros2 service call /detect_object my_robot_msgs/srv/DetectObject "{object_to_dete
 ### 🧠 Central Orchestrator
 * **Status:** 🟢 Functional
 * **Role:** The core state machine. Listens to inputs, overrides previous states, triggers vision detection, and publishes hardware commands.
-* **Dependencies:** `rclpy`, `std_msgs`, `example_interfaces`
+* **Dependencies:** `rclpy`, `std_msgs`, `my_robot_msgs`
 * **Run Command:**
 ```bash
 ros2 run my_robot central_orchestrator
@@ -101,13 +161,13 @@ ros2 run my_robot central_orchestrator
 
 ### 💬 LLM Intent Node
 * **Status:** 🟢 Functional
-* **Role:** Subscribes to `/bot_input`, sends the raw message to Google Gemini to extract the search target, validates it against the YOLO-80 class list, and publishes the lowercase result to `/user_target`. All output goes through ROS2 logger (`get_logger()`) — visible in the terminal and via `ros2 topic echo /rosout`.
-* **Dependencies:** `rclpy`, `std_msgs`, `google-genai`, `python-dotenv`
+* **Role:** Exposes the `parse_intent` service. When called, sends the raw text to Google Gemini, extracts the search target, and validates it against the YOLO-80 class list. Returns `success=True` + the object name if valid (and publishes it to `/user_target`), or `success=False` + an error reason if not.
+* **Dependencies:** `rclpy`, `std_msgs`, `my_robot_msgs`, `google-genai`, `python-dotenv`
 * **Environment:** Requires `GEMINI_API_KEY` in `.env`
 * **Input format:** Any natural language — `"Find me an apple"`, `"Search for banana"`, etc.
 * **Run Commands:**
 ```bash
-ros2 run my_robot llm_parser    # headless — spins and waits for /bot_input messages
+ros2 run my_robot llm_parser    # headless service server
 ros2 run my_robot terminal_ui   # interactive terminal input loop (dev/debug)
 ```
 
@@ -141,17 +201,20 @@ show_snapshot()
 
 ### 🤖 Discord Bot (`discord_bot.py`)
 * **Status:** 🟢 Functional
-* **Role:** The live UI layer. Publishes user commands to `/bot_input` via two triggers: the `/run` slash command and direct bot mentions (`@Bot find me an apple`). All events are logged through the ROS2 node logger.
-* **Dependencies:** `rclpy`, `std_msgs`, `py-cord`, `python-dotenv`
+* **Role:** The live UI layer. Calls the `parse_intent` service on the LLM Intent Node and replies directly to Discord with the result — either confirming the search target or reporting an error if the object isn't recognizable.
+* **Dependencies:** `rclpy`, `my_robot_msgs`, `py-cord`, `python-dotenv`
 * **Environment:** Requires `TOKEN` (Discord bot token) in `.env`
 * **Architecture:**
-  * `DiscordBotNode(Node)` — ROS2 node, owns the publisher and instantiates the bot with `self`
-  * `DiscordBot(discord.Bot)` — Pycord bot, holds `self.node` reference to call `node.publish()`
+  * `DiscordBotNode(Node)` — ROS2 node, owns the service client and instantiates the bot with `self`
+  * `DiscordBot(discord.Bot)` — Pycord bot, holds `self.node` reference to call `node.call_parse_intent()`
   * `BotCommands(discord.Cog)` — groups slash commands; `/run` and `/hello`
-  * ROS2 spins in a daemon thread; Pycord's asyncio event loop runs in the main thread
-* **Triggers that publish to `/bot_input`:**
+  * ROS2 spins in a daemon thread; Pycord's asyncio event loop runs in the main thread; `run_in_executor` bridges the two
+* **Triggers:**
   * `/run <command>` slash command
   * Mentioning the bot in any message: `@Robot find me a bottle`
+* **Responses:**
+  * ✅ `Searching for: bottle` — object valid, orchestrator is now searching
+  * ❌ `Error: 'foo' is not a searchable object.` — LLM couldn't match it to YOLO class list
 * **Run Command:**
 ```bash
 ros2 run my_robot discord_bot

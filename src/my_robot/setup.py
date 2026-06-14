@@ -39,6 +39,7 @@ setup(
             "vision_node = my_robot.vision_node:main",
             "llm_parser = my_robot.llm_output_node:main",
             "discord_bot = my_robot.discord_bot:main",
+            "udp_bridge_node = my_robot.udp_bridge_node:main",
         ],
     },
 )

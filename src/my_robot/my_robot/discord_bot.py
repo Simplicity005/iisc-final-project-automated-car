@@ -1,11 +1,14 @@
+import asyncio
 import os
 import threading
+import time
 
 import discord
 import rclpy
 from dotenv import load_dotenv
 from rclpy.node import Node
-from std_msgs.msg import String
+
+from my_robot_msgs.srv import ParseIntent
 
 
 class BotCommands(discord.Cog):
@@ -22,8 +25,12 @@ class BotCommands(discord.Cog):
         ctx: discord.ApplicationContext,
         command: discord.Option(str, "What should the robot find?"),
     ):
-        self.bot.node.publish(command)
-        await ctx.respond(f"Sent to robot: `{command}`")
+        await ctx.defer()
+        result = await self.bot.node.call_parse_intent(command)
+        if result.success:
+            await ctx.followup.send(f"Searching for: `{result.message}`")
+        else:
+            await ctx.followup.send(f"Error: {result.message}")
 
 
 class DiscordBot(discord.Bot):
@@ -43,22 +50,44 @@ class DiscordBot(discord.Bot):
         text = message.content.replace(f"<@{self.user.id}>", "").strip()
         if not text:
             return
-        self.node.publish(text)
         self.node.get_logger().info(f"Mention from {message.author}: '{text}'")
-        await message.reply(f"Sent to robot: `{text}`")
+        result = await self.node.call_parse_intent(text)
+        if result.success:
+            await message.reply(f"Searching for: `{result.message}`")
+        else:
+            await message.reply(f"Error: {result.message}")
+
+
+# TODO MAKE IT EMBED
 
 
 class DiscordBotNode(Node):
     def __init__(self):
         super().__init__("discord_bot")
-        self.publisher = self.create_publisher(String, "bot_input", 10)
+        self.cli = self.create_client(ParseIntent, "parse_intent")
         self.bot = DiscordBot(node=self, intents=discord.Intents.all())
 
-    def publish(self, text: str):
-        msg = String()
-        msg.data = text
-        self.publisher.publish(msg)
-        self.get_logger().info(f"Published to /bot_input: '{text}'")
+    async def call_parse_intent(self, text: str) -> ParseIntent.Response:
+        req = ParseIntent.Request()
+        req.command = text
+
+        if not self.cli.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("parse_intent service not available")
+            res = ParseIntent.Response()
+            res.success = False
+            res.message = "The LLM parser is not running."
+            return res
+
+        future = self.cli.call_async(req)
+
+        loop = asyncio.get_event_loop()
+
+        def wait_for_result():
+            while not future.done():
+                time.sleep(0.05)
+            return future.result()
+
+        return await loop.run_in_executor(None, wait_for_result)
 
 
 def main(args=None):
