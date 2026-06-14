@@ -1,6 +1,5 @@
 import os
 from glob import glob
-
 from setuptools import find_packages, setup
 
 package_name = "my_robot"
@@ -35,6 +34,10 @@ setup(
             "param_node = my_robot.param_node:main",
             "sensor_publisher = my_robot.sensor_publisher:main",
             "central_orchestrator = my_robot.central_orchestrator:main",
+            "chatbot_node = my_robot.chatbot_node:main",
+            "vision_node = my_robot.vision_node:main",
+            "stream_node = my_robot.stream_node:main",
+            "udp_bridge_node = my_robot.udp_bridge_node:main",
         ],
     },
 )
