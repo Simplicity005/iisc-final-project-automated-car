@@ -101,13 +101,14 @@ ros2 run my_robot central_orchestrator
 
 ### 💬 LLM Intent Node
 * **Status:** 🟢 Functional
-* **Role:** Subscribes to `/bot_input`, sends the raw message to Google Gemini to extract the search target, validates it against the YOLO-80 class list, and publishes the lowercase result to `/user_target`. Prints `True` on success, `False` if the object is not in the searchable set.
+* **Role:** Subscribes to `/bot_input`, sends the raw message to Google Gemini to extract the search target, validates it against the YOLO-80 class list, and publishes the lowercase result to `/user_target`. All output goes through ROS2 logger (`get_logger()`) — visible in the terminal and via `ros2 topic echo /rosout`.
 * **Dependencies:** `rclpy`, `std_msgs`, `google-genai`, `python-dotenv`
-* **Environment:** Requires `GEMINI_API_KEY` set in a `.env` file at the workspace root.
+* **Environment:** Requires `GEMINI_API_KEY` in `.env`
 * **Input format:** Any natural language — `"Find me an apple"`, `"Search for banana"`, etc.
-* **Run Command:**
+* **Run Commands:**
 ```bash
-ros2 run my_robot terminal_ui
+ros2 run my_robot llm_parser    # headless — spins and waits for /bot_input messages
+ros2 run my_robot terminal_ui   # interactive terminal input loop (dev/debug)
 ```
 
 ### 👁️ Vision Node
@@ -138,37 +139,27 @@ from my_robot.utilities.camera import show_snapshot
 show_snapshot()
 ```
 
+### 🤖 Discord Bot (`discord_bot.py`)
+* **Status:** 🟢 Functional
+* **Role:** The live UI layer. Publishes user commands to `/bot_input` via two triggers: the `/run` slash command and direct bot mentions (`@Bot find me an apple`). All events are logged through the ROS2 node logger.
+* **Dependencies:** `rclpy`, `std_msgs`, `py-cord`, `python-dotenv`
+* **Environment:** Requires `TOKEN` (Discord bot token) in `.env`
+* **Architecture:**
+  * `DiscordBotNode(Node)` — ROS2 node, owns the publisher and instantiates the bot with `self`
+  * `DiscordBot(discord.Bot)` — Pycord bot, holds `self.node` reference to call `node.publish()`
+  * `BotCommands(discord.Cog)` — groups slash commands; `/run` and `/hello`
+  * ROS2 spins in a daemon thread; Pycord's asyncio event loop runs in the main thread
+* **Triggers that publish to `/bot_input`:**
+  * `/run <command>` slash command
+  * Mentioning the bot in any message: `@Robot find me a bottle`
+* **Run Command:**
+```bash
+ros2 run my_robot discord_bot
+```
+
 ### 🛜 UDP Bridge
 * **Status:** 🔴 Pending
 * **Role:** Subscribes to ROS2 string states and translates them into 100ms UDP payloads directed at the ESP8266 static IP.
-
----
-
-## ✦ Adding a Discord UI
-
-The UI layer is intentionally decoupled — it only needs to publish a `std_msgs/msg/String` to `/bot_input`. Swapping the terminal for a Discord bot requires no changes to any other node.
-
-```python
-# discord_ui_node.py (skeleton)
-import discord
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
-
-class DiscordUINode(Node):
-    def __init__(self):
-        super().__init__("discord_ui")
-        self.publisher = self.create_publisher(String, "bot_input", 10)
-
-    def forward(self, text: str):
-        msg = String()
-        msg.data = text
-        self.publisher.publish(msg)
-
-# In your Discord on_message handler, call node.forward(message.content)
-```
-
-Any message sent in the Discord channel gets forwarded into the ROS2 network unchanged. The LLM Intent Node handles all parsing — the Discord bot stays dumb.
 
 ---
 
@@ -199,7 +190,8 @@ Create a `.env` file at the workspace root (never commit this):
 
 ```bash
 # ~/ros2_ws/.env
-GEMINI_API_KEY=your_key_here
+GEMINI_API_KEY=your_gemini_key_here
+TOKEN=your_discord_bot_token_here
 ```
 
 ### 3. Workspace Build

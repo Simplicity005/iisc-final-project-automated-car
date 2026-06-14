@@ -45,7 +45,7 @@ class LLmOutputSender(Node):
     def parse_intent(self, msg: String):
         raw_text = msg.data
         start_timer = time.time()
-        print("request started")
+        self.get_logger().info(f"LLM request started for: '{raw_text}'")
 
         # res = self.CLIENT.chat.completions.create(
         #     model="kai/openrouter/free",  # Change later
@@ -60,9 +60,9 @@ class LLmOutputSender(Node):
         )
         finish_time = time.time()
 
-        print(f"it tooke {finish_time - start_timer} time to complete request")
+        self.get_logger().info(f"LLM response in {finish_time - start_timer:.2f}s")
 
-        content = res.text.strip()
+        content = str(res.text).strip()
 
         try:
             data = json.loads(content)
@@ -73,19 +73,19 @@ class LLmOutputSender(Node):
             objective = match.group(1) if match else None
 
         if not objective:
-            print("False")
+            self.get_logger().warn("No objective extracted from input")
             return
 
         objective_lower = objective.lower().strip()
 
         if objective_lower not in _SEARCHABLE_SET:
-            print(f"False  # '{objective_lower}' not in searchable objects")
+            self.get_logger().warn(f"'{objective_lower}' not in searchable objects")
             return
 
         pub_msg = String()
         pub_msg.data = objective_lower
         self.publisher.publish(pub_msg)
-        print(f"True  # published '{objective_lower}' to user_target")
+        self.get_logger().info(f"Published '{objective_lower}' to /user_target")
 
 
 def term(args=None):
@@ -98,6 +98,14 @@ def term(args=None):
             break
         node.parse_intent(String(data=msg))
 
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = LLmOutputSender()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

@@ -37,6 +37,8 @@ setup(
             "central_orchestrator = my_robot.central_orchestrator:main",
             "terminal_ui = my_robot.llm_output_node:term",
             "vision_node = my_robot.vision_node:main",
+            "llm_parser = my_robot.llm_output_node:main",
+            "discord_bot = my_robot.discord_bot:main",
         ],
     },
 )
