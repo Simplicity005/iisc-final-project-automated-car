@@ -1,3 +1,5 @@
+import time
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -26,6 +28,7 @@ class CentralOrchestrator(Node):
         self.current_target = ""
         self._detection_pending = False
         self._pending_target = ""
+        self._last_turn_time = 0.0
 
         # Timer drives the search loop
         self.timer = self.create_timer(0.5, self.timer_callback)
@@ -123,6 +126,10 @@ class CentralOrchestrator(Node):
 
     def _on_not_found(self):
         """Called when DetectObject returns success=False — rotate to keep searching."""
+        now = time.monotonic()
+        if now - self._last_turn_time < 1.0:
+            return
+        self._last_turn_time = now
         left_msg = String()
         left_msg.data = "LEFT"
         self.cmd_pub.publish(left_msg)
