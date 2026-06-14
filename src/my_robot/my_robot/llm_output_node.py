@@ -1,0 +1,107 @@
+import json
+import os
+import re
+import time
+
+import rclpy
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from rclpy.node import Node
+from std_msgs.msg import String
+
+from .utilities.yolo_objects import searchable_objects
+
+load_dotenv()
+
+_SEARCHABLE_SET = set(searchable_objects)
+
+_SYSTEM_PROMPT = """You are an intent parser for a robot vision system.
+The user will ask you to find or search for an object.
+Extract the single physical object they want to find and return ONLY valid JSON in this exact format:
+{{"objective": "<object name>"}}
+
+Rules:
+- Return ONLY the JSON object, no markdown, no explanation, no extra text.
+- The value must be a single common noun (e.g. "apple", "banana", "car").
+- If you cannot identify a clear search target, return {{"objective": null}}.
+"""
+
+
+class LLmOutputSender(Node):
+    CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    # OpenAI(
+    #     api_key="sta_21bfcd68f16a6fb61ccf6c3eb5e38f12ae870aa2a28055b4",
+    #     base_url="https://api.freetheai.xyz/v1",
+    # )
+
+    def __init__(self):
+        super().__init__("llm_command")
+        self.publisher = self.create_publisher(String, "user_target", 10)
+        self.subscriber = self.create_subscription(
+            String, "bot_input", self.parse_intent, 10
+        )  # Later make a proper service and receiver so that UI can get True and False
+
+    def parse_intent(self, msg: String):
+        raw_text = msg.data
+        start_timer = time.time()
+        print("request started")
+
+        # res = self.CLIENT.chat.completions.create(
+        #     model="kai/openrouter/free",  # Change later
+        #     messages=[
+        #         {"role": "system", "content": _SYSTEM_PROMPT},
+        #         {"role": "user", "content": raw_text},
+        #     ],
+        res = self.CLIENT.models.generate_content(
+            model="gemini-3.5-flash",
+            config=types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
+            contents=raw_text,
+        )
+        finish_time = time.time()
+
+        print(f"it tooke {finish_time - start_timer} time to complete request")
+
+        content = res.text.strip()
+
+        try:
+            data = json.loads(content)
+            objective = data.get("objective")
+        except (json.JSONDecodeError, AttributeError):
+            # Fallback: try to extract the value with regex if the model wrapped the JSON
+            match = re.search(r'"objective"\s*:\s*"([^"]+)"', content)
+            objective = match.group(1) if match else None
+
+        if not objective:
+            print("False")
+            return
+
+        objective_lower = objective.lower().strip()
+
+        if objective_lower not in _SEARCHABLE_SET:
+            print(f"False  # '{objective_lower}' not in searchable objects")
+            return
+
+        pub_msg = String()
+        pub_msg.data = objective_lower
+        self.publisher.publish(pub_msg)
+        print(f"True  # published '{objective_lower}' to user_target")
+
+
+def term(args=None):
+    rclpy.init(args=args)
+    node = LLmOutputSender()
+
+    while True:
+        msg = input("What should I do?: ").strip()
+        if not msg:
+            break
+        node.parse_intent(String(data=msg))
+
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    term()
