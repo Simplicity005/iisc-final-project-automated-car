@@ -28,21 +28,22 @@ graph TD
     classDef nodes fill:#f4f4f4,stroke:#333,stroke-width:1px,color:#333;
     classDef hardware fill:#E95420,stroke:#fff,stroke-width:2px,color:#fff;
     classDef ui fill:#6C3483,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef camera fill:#1a6b3c,stroke:#fff,stroke-width:2px,color:#fff;
 
     %% Nodes
     UI[🖥️ UI Layer<br/>Terminal / Discord Bot]:::ui
     D[💬 LLM Intent Node]:::nodes
     A{🧠 Central Orchestrator}:::central
     B[👁️ Vision Node]:::nodes
-    C[🎥 Camera Stream]:::nodes
+    CAM[📷 IP Camera<br/>MJPEG Stream]:::camera
     E[🛜 UDP Bridge]:::nodes
     HW((ESP8266 Chassis)):::hardware
 
     %% Connections
     UI -- "/bot_input (Topic)" --> D
     D -- "/user_target (Topic)" --> A
-    A -- "/set_yolo_target (Service)" --> B
-    C -- "/video_frames (Topic)" --> B
+    A -- "/detect_object (Service)" --> B
+    CAM -. "HTTP MJPEG stream" .-> B
     B -- "/detection_status (Topic)" --> A
     A -- "/movement_commands (Topic)" --> E
     E -. "UDP Payloads (Wi-Fi)" .-> HW
@@ -62,13 +63,27 @@ To maintain system integrity across different development teams, all inter-node 
 | **LLM Intent** | **Central** | `/user_target` | `std_msgs/msg/String` | Validated, lowercase object target (e.g. `"apple"`). |
 | **Vision** | **Central** | `/detection_status` | `std_msgs/msg/Bool` | Broadcasts `True` upon target acquisition. |
 | **Central** | **UDP Bridge** | `/movement_commands` | `std_msgs/msg/String` | Emits hardware state (`TURN` / `STOP`). |
-| **Camera** | **Vision** | `/video_frames` | `sensor_msgs/msg/Image` | Hoses raw hardware camera feed. |
 
 ### Synchronous Configuration (Services)
 
-| Client | Server | Service Name | Request Type | Purpose |
+| Client | Server | Service Name | Service Type | Purpose |
 | --- | --- | --- | --- | --- |
-| **Central** | **Vision** | `/set_yolo_target` | `example_interfaces/srv/SetBool` | Dynamically overrides YOLO's search filter. |
+| **Central** | **Vision** | `/detect_object` | `my_robot_msgs/srv/DetectObject` | Trigger detection for a named object; returns `success` + `message`. |
+
+### Custom Service Definitions (`my_robot_msgs`)
+
+#### `DetectObject.srv`
+```
+string object_to_detect
+---
+bool success
+string message
+```
+
+Call example:
+```bash
+ros2 service call /detect_object my_robot_msgs/srv/DetectObject "{object_to_detect: 'bottle'}"
+```
 
 ---
 
@@ -78,7 +93,7 @@ To maintain system integrity across different development teams, all inter-node 
 
 ### 🧠 Central Orchestrator
 * **Status:** 🟢 Functional
-* **Role:** The core state machine. Listens to inputs, overrides previous states, configures vision, and publishes hardware commands.
+* **Role:** The core state machine. Listens to inputs, overrides previous states, triggers vision detection, and publishes hardware commands.
 * **Dependencies:** `rclpy`, `std_msgs`, `example_interfaces`
 * **Run Command:**
 ```bash
@@ -87,21 +102,42 @@ ros2 run my_robot central_orchestrator
 
 ### 💬 LLM Intent Node
 * **Status:** 🟢 Functional
-* **Role:** Subscribes to `/bot_input`, sends the raw message to an LLM to extract the search target, validates it against the YOLO-80 class list, and publishes the lowercase result to `/user_target`. Prints `True` on success, `False` if the object is not in the searchable set.
-* **Dependencies:** `rclpy`, `std_msgs`, `openai`
+* **Role:** Subscribes to `/bot_input`, sends the raw message to Google Gemini to extract the search target, validates it against the YOLO-80 class list, and publishes the lowercase result to `/user_target`. Prints `True` on success, `False` if the object is not in the searchable set.
+* **Dependencies:** `rclpy`, `std_msgs`, `google-genai`, `python-dotenv`
+* **Environment:** Requires `GEMINI_API_KEY` set in a `.env` file at the workspace root.
 * **Input format:** Any natural language — `"Find me an apple"`, `"Search for banana"`, etc.
 * **Run Command:**
 ```bash
-ros2 run my_robot llm_command
+ros2 run my_robot terminal_ui
 ```
 
 ### 👁️ Vision Node
-* **Status:** 🔴 Pending
-* **Role:** YOLO inference node. Scans the `/video_frames` feed exclusively for the class specified by the Orchestrator.
+* **Status:** 🟡 In Progress
+* **Role:** Exposes the `/detect_object` service. On each call, grabs a live frame from the IP camera, runs YOLOv26 inference, and returns whether the requested object was found.
+* **Dependencies:** `rclpy`, `my_robot_msgs`, `ultralytics`, `opencv-python`, `python-dotenv`
+* **Model:** `yolo26m.pt` (place in `~/ros2_ws/` before running)
+* **Run Command:**
+```bash
+ros2 run my_robot vision_node
+```
 
-### 🎥 Camera Stream
-* **Status:** 🔴 Pending
-* **Role:** Interfaces directly with camera hardware, broadcasting image data to the ROS2 network.
+### 📷 Camera Utility (`utilities/camera.py`)
+* **Status:** 🟢 Functional
+* **Role:** Thin wrapper around an IP camera MJPEG stream. Consumed internally by the Vision Node — not a standalone ROS node.
+* **Camera URL:** `http://192.168.1.13:8080/video` (update `CAMERA_URL` in `camera.py` to match your device)
+* **Key fixes:**
+  * `CAP_PROP_BUFFERSIZE = 1` — prevents OpenCV from caching stale frames
+  * 5-frame `grab()` drain before each `read()` — ensures the returned image is live
+* **Debug / Preview:** Run directly to open a live OpenCV window:
+```bash
+python3 src/my_robot/my_robot/utilities/camera.py
+# Press q to quit
+```
+Or call `show_snapshot()` from Python to preview a single frame:
+```python
+from my_robot.utilities.camera import show_snapshot
+show_snapshot()
+```
 
 ### 🛜 UDP Bridge
 * **Status:** 🔴 Pending
@@ -146,6 +182,10 @@ Any message sent in the Discord channel gets forwarded into the ROS2 network unc
 * **OS:** Linux Ubuntu 24.04 (Noble) or WSL2 equivalent
 * **Framework:** ROS2 Jazzy Jalisco
 * **Network:** ESP8266 and Host PC on the same localized Wi-Fi.
+* **Python:** `empy==3.3.4` required — ROS2 Jazzy is incompatible with empy 4.x:
+```bash
+pip install "empy==3.3.4"
+```
 
 If using WSL2, ensure your display is exported to view camera streams:
 
@@ -154,37 +194,46 @@ echo "export DISPLAY=:0" >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### 2. Workspace Build
+### 2. Environment Variables
+
+Create a `.env` file at the workspace root (never commit this):
+
+```bash
+# ~/ros2_ws/.env
+GEMINI_API_KEY=your_key_here
+```
+
+### 3. Workspace Build
 
 ```bash
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
-git clone [YOUR_REPOSITORY_URL] llm_vision_bot
+git clone [YOUR_REPOSITORY_URL] .
 cd ~/ros2_ws
 colcon build
 source install/setup.bash
 ```
 
-### 3. Developer Build Script
+### 4. Developer Build Script
 
-Instead of the manual build/source cycle, use the included `build_robot.sh` script. It automatically detects your shell (bash/zsh) and sources the correct setup file.
+The `build_robot.sh` script automatically detects your shell (bash/zsh) and sources the correct setup file. It now accepts an optional package argument:
 
 ```bash
-# From ~/ros2_ws
+# Build everything
 ./build_robot.sh
+./build_robot.sh all
+
+# Build a specific package only
+./build_robot.sh my_robot
+./build_robot.sh my_robot_msgs
 ```
 
-The script:
-1. Navigates to `~/ros2_ws`
-2. Builds only the `llm_interface` package (`colcon build --packages-select llm_interface`)
-3. Sources `install/setup.zsh`, `setup.bash`, or `setup.sh` depending on your active shell
-
-To target a different package, edit the `colcon build` line in `build_robot.sh`:
+When adding new custom messages or services, always build `my_robot_msgs` first:
 ```bash
-colcon build --packages-select YOUR_PACKAGE_NAME
+./build_robot.sh my_robot_msgs && ./build_robot.sh my_robot
 ```
 
-### 4. Manual Developer Execution
+### 5. Manual Developer Execution
 
 If you prefer the manual cycle:
 

@@ -36,7 +36,7 @@ setup(
             # "sensor_publisher = my_robot.sensor_publisher:main",
             "central_orchestrator = my_robot.central_orchestrator:main",
             "terminal_ui = my_robot.llm_output_node:term",
-            "test = my_robot.test:main",
+            "vision_node = my_robot.vision_node:main",
         ],
     },
 )
