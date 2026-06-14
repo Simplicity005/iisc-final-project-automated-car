@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
-from example_interfaces.srv import SetBool
+from example_interfaces.srv import SetString
 
 class CentralOrchestrator(Node):
     def __init__(self):
@@ -9,7 +9,7 @@ class CentralOrchestrator(Node):
         self.target_sub = self.create_subscription(String, '/user_target', self.target_callback, 10)
         self.vision_sub = self.create_subscription(Bool, '/detection_status', self.vision_callback, 10)
         self.cmd_pub = self.create_publisher(String, '/movement_commands', 10)
-        self.yolo_client = self.create_client(SetBool, '/set_yolo_target')
+        self.yolo_client = self.create_client(SetString, '/set_yolo_target')
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.state = 'IDLE'
         self.current_target = ''
@@ -22,9 +22,11 @@ class CentralOrchestrator(Node):
 
     def send_yolo_update(self):
         if self.yolo_client.wait_for_service(timeout_sec=1.0):
-            req = SetBool.Request()
-            req.data = True
+            req = SetString.Request()
+            req.data = self.current_target
             self.yolo_client.call_async(req)
+        else:
+            self.get_logger().warn("Vision service not available")
 
     def vision_callback(self, msg):
         if msg.data and self.state == 'SEARCHING':

@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
-from example_interfaces.srv import SetBool
+from example_interfaces.srv import SetString
 from sensor_msgs.msg import Image
 import cv2
 from cv_bridge import CvBridge
@@ -10,18 +10,22 @@ from ultralytics import YOLO
 class VisionNode(Node):
     def __init__(self):
         super().__init__('vision_node')
-        self.target_service = self.create_service(SetBool, '/set_yolo_target', self.set_target_callback)
         self.status_pub = self.create_publisher(Bool, '/detection_status', 10)
         self.annotated_pub = self.create_publisher(Image, '/annotated_frames', 10)
         self.image_sub = self.create_subscription(Image, '/video_frames', self.image_callback, 10)
         self.is_searching = False
         self.bridge = CvBridge()
         self.model = YOLO('yolov8n.pt')
-        self.current_target_class = 'bottle'
+        self.current_target_class = None
+        self.set_target_srv = self.create_service(
+            SetString, '/set_yolo_target', self.set_target_callback
+        )
 
     def set_target_callback(self, request, response):
-        self.is_searching = request.data
+        self.current_target_class = request.data
+        self.is_searching = True
         response.success = True
+        response.message = f"Now searching for: {self.current_target_class}"
         return response
 
     def image_callback(self, msg):

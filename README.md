@@ -69,6 +69,47 @@ To maintain system integrity across different development teams, all inter-node 
 
 ---
 
+## ✦ Central Orchestrator Flow
+
+The central orchestrator is the state-machine core of the system. It listens for user intent, configures the vision node, and publishes movement commands based on detection status.
+
+1. **Receive target input**
+   - Subscribes to `/user_target` (`std_msgs/msg/String`).
+   - When a new target string arrives, the orchestrator updates `current_target` and enters the `SEARCHING` state.
+
+2. **Trigger vision configuration**
+   - Calls the `/set_yolo_target` service (`example_interfaces/srv/SetBool`) on the vision node.
+   - In the current implementation, it sends `req.data = True` to enable or refresh YOLO target filtering.
+   - This is a synchronous request/response mechanism that ensures the vision node is explicitly told when a new target search begins.
+
+3. **Watch detection status**
+   - Subscribes to `/detection_status` (`std_msgs/msg/Bool`).
+   - When the vision node publishes `True`, the orchestrator transitions from `SEARCHING` to `FOUND`.
+   - Once the target is found, the orchestrator sends a `STOP` command to the motor control chain.
+
+4. **Publish movement commands**
+   - Publishes to `/movement_commands` (`std_msgs/msg/String`).
+   - While in the `SEARCHING` state, it repeatedly sends `TURN` at the timer interval (0.1s).
+   - When the target is found, it publishes `STOP`.
+
+### Subscribed and published channels used by the orchestrator
+
+- `/user_target` (subscriber): receives the desired object target from the chatbot/NLP node.
+- `/detection_status` (subscriber): receives boolean confirmation from the vision node.
+- `/movement_commands` (publisher): sends robot action states to the UDP bridge.
+- `/set_yolo_target` (service client): requests vision node target updates and search mode activation.
+
+### How the entire system works together
+
+- The **camera stream** node publishes raw frames on `/video_frames`.
+- The **vision node** consumes `/video_frames` and detects whether the current object of interest is visible.
+- The **central orchestrator** controls the state transitions: it decides when vision should search, when to keep turning, and when to stop.
+- The **UDP bridge** receives `/movement_commands` and sends low-latency Wi-Fi payloads to the ESP8266 chassis.
+
+Together, this design separates high-level intent, visual perception, and low-level actuation into clearly defined ROS2 channels, allowing each module to evolve independently while preserving a single orchestration path.
+
+---
+
 ## ✦ Team Domains
 
 > **Maintainers:** Update your respective blocks with specific dependencies and run commands as your modules reach completion.
