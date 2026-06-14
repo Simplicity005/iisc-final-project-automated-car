@@ -22,31 +22,31 @@ A highly modular, distributed ROS2 architecture bridging high-level artificial i
 Due to the computational limits of the ESP8266 chassis, the entire ROS2 network operates on a host PC. The system is designed around a central state-machine orchestrator, ensuring rapid state updates and the ability to instantly override hardware commands using strictly defined **Topics** and **Services**.
 
 ```mermaid
-graph TD
-    %% Styling
-    classDef central fill:#22314E,stroke:#fff,stroke-width:2px,color:#fff;
-    classDef nodes fill:#f4f4f4,stroke:#333,stroke-width:1px,color:#333;
-    classDef hardware fill:#E95420,stroke:#fff,stroke-width:2px,color:#fff;
-    classDef ui fill:#6C3483,stroke:#fff,stroke-width:2px,color:#fff;
-    classDef camera fill:#1a6b3c,stroke:#fff,stroke-width:2px,color:#fff;
+flowchart TD
+    classDef central fill:#22314E,stroke:#fff,stroke-width:2px,color:#fff
+    classDef nodes fill:#f4f4f4,stroke:#333,stroke-width:1px,color:#333
+    classDef hardware fill:#E95420,stroke:#fff,stroke-width:2px,color:#fff
+    classDef ui fill:#6C3483,stroke:#fff,stroke-width:2px,color:#fff
+    classDef camera fill:#1a6b3c,stroke:#fff,stroke-width:2px,color:#fff
 
-    %% Nodes
     UI[🖥️ UI Layer<br/>Terminal / Discord Bot]:::ui
     D[💬 LLM Intent Node]:::nodes
     A{🧠 Central Orchestrator}:::central
-    B[👁️ Vision Node]:::nodes
-    CAM[📷 IP Camera<br/>MJPEG Stream]:::camera
     E[🛜 UDP Bridge]:::nodes
     HW((ESP8266 Chassis)):::hardware
 
-    %% Connections
-    UI -- "/bot_input (Topic)" --> D
-    D -- "/user_target (Topic)" --> A
-    A -- "/detect_object (Service)" --> B
-    CAM -. "HTTP MJPEG stream" .-> B
-    B -- "/detection_status (Topic)" --> A
-    A -- "/movement_commands (Topic)" --> E
-    E -. "UDP Payloads (Wi-Fi)" .-> HW
+    subgraph VS [" "]
+        direction TB
+        CAM[📷 IP Camera]:::camera
+        B[👁️ Vision Node]:::nodes
+        CAM -. MJPEG .-> B
+    end
+
+    UI -->|/bot_input| D
+    D -->|/user_target| A
+    A <-->|/detect_object| B
+    A -->|/movement_commands| E
+    E -. UDP .-> HW
 ```
 
 ---
@@ -61,7 +61,6 @@ To maintain system integrity across different development teams, all inter-node 
 | --- | --- | --- | --- | --- |
 | **UI Layer** | **LLM Intent** | `/bot_input` | `std_msgs/msg/String` | Raw natural language from the user. |
 | **LLM Intent** | **Central** | `/user_target` | `std_msgs/msg/String` | Validated, lowercase object target (e.g. `"apple"`). |
-| **Vision** | **Central** | `/detection_status` | `std_msgs/msg/Bool` | Broadcasts `True` upon target acquisition. |
 | **Central** | **UDP Bridge** | `/movement_commands` | `std_msgs/msg/String` | Emits hardware state (`TURN` / `STOP`). |
 
 ### Synchronous Configuration (Services)
@@ -112,8 +111,8 @@ ros2 run my_robot terminal_ui
 ```
 
 ### 👁️ Vision Node
-* **Status:** 🟡 In Progress
-* **Role:** Exposes the `/detect_object` service. On each call, grabs a live frame from the IP camera, runs YOLOv26 inference, and returns whether the requested object was found.
+* **Status:** 🟢 Functional
+* **Role:** Exposes the `/detect_object` service. The Central Orchestrator calls this service with an object name; the Vision Node grabs a live camera frame, runs YOLOv26 inference, and replies directly with `success: bool` and a `message`. No topic feedback — the Orchestrator drives the loop by calling the service repeatedly and acts on the response.
 * **Dependencies:** `rclpy`, `my_robot_msgs`, `ultralytics`, `opencv-python`, `python-dotenv`
 * **Model:** `yolo26m.pt` (place in `~/ros2_ws/` before running)
 * **Run Command:**
